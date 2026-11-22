@@ -1,0 +1,661 @@
+[
+  {
+    "id": "tab_p9",
+    "type": "tab",
+    "label": "Praktek 9 - REST API Suhu",
+    "disabled": false,
+    "info": ""
+  },
+  {
+    "id": "ws_srv",
+    "type": "websocket-listener",
+    "path": "/ws/suhu",
+    "wholemsg": "false"
+  },
+  {
+    "id": "db1",
+    "type": "sqlitedb",
+    "db": "suhu.db",
+    "mode": "RWC"
+  },
+  {
+    "id": "c_init",
+    "type": "comment",
+    "name": "1) INIT: buat tabel SQLite + threshold awal",
+    "info": "",
+    "x": 200,
+    "y": 40,
+    "wires": [],
+    "z": "tab_p9"
+  },
+  {
+    "id": "inj_init",
+    "type": "inject",
+    "name": "Saat deploy",
+    "props": [],
+    "repeat": "",
+    "crontab": "",
+    "once": true,
+    "onceDelay": "0.5",
+    "topic": "",
+    "x": 130,
+    "y": 80,
+    "wires": [
+      [
+        "f_init"
+      ]
+    ],
+    "z": "tab_p9"
+  },
+  {
+    "id": "f_init",
+    "type": "function",
+    "name": "Set threshold awal",
+    "func": "if (flow.get(\"threshold\") === undefined) flow.set(\"threshold\", 30);\nreturn msg;",
+    "outputs": 1,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 330,
+    "y": 80,
+    "wires": [
+      [
+        "sql_create"
+      ]
+    ],
+    "z": "tab_p9"
+  },
+  {
+    "id": "sql_create",
+    "type": "sqlite",
+    "mydb": "db1",
+    "sqlquery": "fixed",
+    "sql": "CREATE TABLE IF NOT EXISTS readings (id INTEGER PRIMARY KEY AUTOINCREMENT, ts TEXT NOT NULL, temp REAL NOT NULL, hum REAL);",
+    "name": "CREATE TABLE readings",
+    "x": 560,
+    "y": 80,
+    "wires": [
+      []
+    ],
+    "z": "tab_p9"
+  },
+  {
+    "id": "c_sens",
+    "type": "comment",
+    "name": "2) SENSOR: simulasi tiap 2 dtk -> simpan DB -> broadcast WebSocket (tanpa polling)",
+    "info": "",
+    "x": 300,
+    "y": 150,
+    "wires": [],
+    "z": "tab_p9"
+  },
+  {
+    "id": "inj_sens",
+    "type": "inject",
+    "name": "Tiap 2 detik",
+    "props": [],
+    "repeat": "2",
+    "crontab": "",
+    "once": true,
+    "onceDelay": "2",
+    "topic": "",
+    "x": 130,
+    "y": 200,
+    "wires": [
+      [
+        "f_sim"
+      ]
+    ],
+    "z": "tab_p9"
+  },
+  {
+    "id": "f_sim",
+    "type": "function",
+    "name": "Simulasi sensor",
+    "func": "let t = flow.get(\"sim\") ?? 28;\nt += (Math.random() - 0.5) * 3;\nt = Math.max(18, Math.min(40, t));\nflow.set(\"sim\", t);\nmsg.payload = { temp: +t.toFixed(1), hum: +(50 + Math.random() * 20).toFixed(1) };\nreturn msg;",
+    "outputs": 1,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 320,
+    "y": 200,
+    "wires": [
+      [
+        "f_proc"
+      ]
+    ],
+    "z": "tab_p9"
+  },
+  {
+    "id": "f_proc",
+    "type": "function",
+    "name": "Proses pembacaan + cek threshold",
+    "func": "const p = msg.payload || {};\nconst temp = Number(p.temp);\nconst hum = Number(p.hum ?? 0);\nif (!isFinite(temp)) {\n    if (msg.res) { msg.statusCode = 400; msg.payload = { error: \"Field 'temp' harus berupa angka\" }; return [null, null, null, msg]; }\n    return null;\n}\nconst thr = flow.get(\"threshold\") ?? 30;\nconst ts = new Date().toISOString();\nconst reading = { type: \"reading\", ts, temp, hum, threshold: thr, alert: temp > thr };\nflow.set(\"last\", reading);\n\nconst ins = { params: { $ts: ts, $temp: temp, $hum: hum } };       // -> SQLite\nconst wsReading = { payload: JSON.stringify(reading) };            // -> WebSocket\nlet wsAlert = null;\nif (temp > thr) {                                                  // notifikasi melewati batas\n    const message = `Suhu ${temp}\\u00B0C melewati batas ${thr}\\u00B0C`;\n    wsAlert = { payload: JSON.stringify({ type: \"alert\", ts, temp, threshold: thr, message }) };\n    node.warn(message);\n}\nlet reply = null;\nif (msg.res) { msg.statusCode = 201; msg.payload = reading; reply = msg; }  // jika dari POST /api/suhu\nreturn [ins, wsReading, wsAlert, reply];",
+    "outputs": 4,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 560,
+    "y": 200,
+    "wires": [
+      [
+        "sql_ins"
+      ],
+      [
+        "ws_o1"
+      ],
+      [
+        "ws_o1"
+      ],
+      [
+        "h_post_out"
+      ]
+    ],
+    "z": "tab_p9"
+  },
+  {
+    "id": "sql_ins",
+    "type": "sqlite",
+    "mydb": "db1",
+    "sqlquery": "prepared",
+    "sql": "INSERT INTO readings (ts, temp, hum) VALUES ($ts, $temp, $hum);",
+    "name": "INSERT readings",
+    "x": 840,
+    "y": 160,
+    "wires": [
+      []
+    ],
+    "z": "tab_p9"
+  },
+  {
+    "id": "ws_o1",
+    "type": "websocket out",
+    "name": "Broadcast WS",
+    "server": "ws_srv",
+    "client": "",
+    "x": 840,
+    "y": 220,
+    "wires": [],
+    "z": "tab_p9"
+  },
+  {
+    "id": "c_post",
+    "type": "comment",
+    "name": "3) POST /api/suhu  (kirim data dari sensor asli, perlu X-API-Key)",
+    "info": "",
+    "x": 260,
+    "y": 290,
+    "wires": [],
+    "z": "tab_p9"
+  },
+  {
+    "id": "h_post",
+    "type": "http in",
+    "name": "",
+    "url": "/api/suhu",
+    "method": "post",
+    "upload": false,
+    "swaggerDoc": "",
+    "x": 130,
+    "y": 330,
+    "wires": [
+      [
+        "f_auth_post"
+      ]
+    ],
+    "z": "tab_p9"
+  },
+  {
+    "id": "f_auth_post",
+    "type": "function",
+    "name": "Cek X-API-Key",
+    "func": "const key = env.get(\"API_KEY\") || \"secret123\";\nif (msg.req.headers[\"x-api-key\"] === key) return [msg, null];\nmsg.statusCode = 401;\nmsg.payload = { error: \"Unauthorized: header X-API-Key tidak valid\" };\nreturn [null, msg];",
+    "outputs": 2,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 330,
+    "y": 330,
+    "wires": [
+      [
+        "f_proc"
+      ],
+      [
+        "h_post_out"
+      ]
+    ],
+    "z": "tab_p9"
+  },
+  {
+    "id": "h_post_out",
+    "type": "http response",
+    "name": "",
+    "statusCode": "",
+    "headers": {},
+    "x": 600,
+    "y": 360,
+    "wires": [],
+    "z": "tab_p9"
+  },
+  {
+    "id": "c_get",
+    "type": "comment",
+    "name": "4) GET /api/suhu  (data terakhir)",
+    "info": "",
+    "x": 200,
+    "y": 420,
+    "wires": [],
+    "z": "tab_p9"
+  },
+  {
+    "id": "h_get",
+    "type": "http in",
+    "name": "",
+    "url": "/api/suhu",
+    "method": "get",
+    "upload": false,
+    "swaggerDoc": "",
+    "x": 130,
+    "y": 460,
+    "wires": [
+      [
+        "f_auth_get"
+      ]
+    ],
+    "z": "tab_p9"
+  },
+  {
+    "id": "f_auth_get",
+    "type": "function",
+    "name": "Cek X-API-Key",
+    "func": "const key = env.get(\"API_KEY\") || \"secret123\";\nif (msg.req.headers[\"x-api-key\"] === key) return [msg, null];\nmsg.statusCode = 401;\nmsg.payload = { error: \"Unauthorized: header X-API-Key tidak valid\" };\nreturn [null, msg];",
+    "outputs": 2,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 330,
+    "y": 460,
+    "wires": [
+      [
+        "f_last"
+      ],
+      [
+        "h_get_out"
+      ]
+    ],
+    "z": "tab_p9"
+  },
+  {
+    "id": "f_last",
+    "type": "function",
+    "name": "Ambil data terakhir",
+    "func": "msg.payload = flow.get(\"last\") || { message: \"Belum ada data\" };\nreturn msg;",
+    "outputs": 1,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 560,
+    "y": 450,
+    "wires": [
+      [
+        "h_get_out"
+      ]
+    ],
+    "z": "tab_p9"
+  },
+  {
+    "id": "h_get_out",
+    "type": "http response",
+    "name": "",
+    "statusCode": "",
+    "headers": {},
+    "x": 780,
+    "y": 470,
+    "wires": [],
+    "z": "tab_p9"
+  },
+  {
+    "id": "c_hist",
+    "type": "comment",
+    "name": "5) GET /api/history?limit=50  (dibaca dari SQLite, bukan flow context)",
+    "info": "",
+    "x": 260,
+    "y": 540,
+    "wires": [],
+    "z": "tab_p9"
+  },
+  {
+    "id": "h_hist",
+    "type": "http in",
+    "name": "",
+    "url": "/api/history",
+    "method": "get",
+    "upload": false,
+    "swaggerDoc": "",
+    "x": 130,
+    "y": 580,
+    "wires": [
+      [
+        "f_auth_hist"
+      ]
+    ],
+    "z": "tab_p9"
+  },
+  {
+    "id": "f_auth_hist",
+    "type": "function",
+    "name": "Cek X-API-Key",
+    "func": "const key = env.get(\"API_KEY\") || \"secret123\";\nif (msg.req.headers[\"x-api-key\"] === key) return [msg, null];\nmsg.statusCode = 401;\nmsg.payload = { error: \"Unauthorized: header X-API-Key tidak valid\" };\nreturn [null, msg];",
+    "outputs": 2,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 330,
+    "y": 580,
+    "wires": [
+      [
+        "f_hist_q"
+      ],
+      [
+        "h_hist_out"
+      ]
+    ],
+    "z": "tab_p9"
+  },
+  {
+    "id": "f_hist_q",
+    "type": "function",
+    "name": "Siapkan limit",
+    "func": "const lim = Math.min(parseInt(msg.req.query.limit) || 50, 1000);\nmsg.params = { $limit: lim };\nreturn msg;",
+    "outputs": 1,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 540,
+    "y": 570,
+    "wires": [
+      [
+        "sql_hist"
+      ]
+    ],
+    "z": "tab_p9"
+  },
+  {
+    "id": "sql_hist",
+    "type": "sqlite",
+    "mydb": "db1",
+    "sqlquery": "prepared",
+    "sql": "SELECT ts, temp, hum FROM readings ORDER BY id DESC LIMIT $limit;",
+    "name": "SELECT history",
+    "x": 740,
+    "y": 570,
+    "wires": [
+      [
+        "f_hist_r"
+      ]
+    ],
+    "z": "tab_p9"
+  },
+  {
+    "id": "f_hist_r",
+    "type": "function",
+    "name": "Urutkan lama -> baru",
+    "func": "msg.payload = (msg.payload || []).reverse();\nreturn msg;",
+    "outputs": 1,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 940,
+    "y": 570,
+    "wires": [
+      [
+        "h_hist_out"
+      ]
+    ],
+    "z": "tab_p9"
+  },
+  {
+    "id": "h_hist_out",
+    "type": "http response",
+    "name": "",
+    "statusCode": "",
+    "headers": {},
+    "x": 1120,
+    "y": 590,
+    "wires": [],
+    "z": "tab_p9"
+  },
+  {
+    "id": "c_thr",
+    "type": "comment",
+    "name": "6) GET/PUT /api/threshold  (set batas suhu; kirim notifikasi bila suhu terakhir melewati batas)",
+    "info": "",
+    "x": 330,
+    "y": 660,
+    "wires": [],
+    "z": "tab_p9"
+  },
+  {
+    "id": "h_thr_get",
+    "type": "http in",
+    "name": "",
+    "url": "/api/threshold",
+    "method": "get",
+    "upload": false,
+    "swaggerDoc": "",
+    "x": 130,
+    "y": 700,
+    "wires": [
+      [
+        "f_auth_tg"
+      ]
+    ],
+    "z": "tab_p9"
+  },
+  {
+    "id": "f_auth_tg",
+    "type": "function",
+    "name": "Cek X-API-Key",
+    "func": "const key = env.get(\"API_KEY\") || \"secret123\";\nif (msg.req.headers[\"x-api-key\"] === key) return [msg, null];\nmsg.statusCode = 401;\nmsg.payload = { error: \"Unauthorized: header X-API-Key tidak valid\" };\nreturn [null, msg];",
+    "outputs": 2,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 330,
+    "y": 700,
+    "wires": [
+      [
+        "f_thr_get"
+      ],
+      [
+        "h_thr_out"
+      ]
+    ],
+    "z": "tab_p9"
+  },
+  {
+    "id": "f_thr_get",
+    "type": "function",
+    "name": "Baca threshold",
+    "func": "msg.payload = { threshold: flow.get(\"threshold\") ?? 30 };\nreturn msg;",
+    "outputs": 1,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 540,
+    "y": 690,
+    "wires": [
+      [
+        "h_thr_out"
+      ]
+    ],
+    "z": "tab_p9"
+  },
+  {
+    "id": "h_thr_put",
+    "type": "http in",
+    "name": "",
+    "url": "/api/threshold",
+    "method": "put",
+    "upload": false,
+    "swaggerDoc": "",
+    "x": 130,
+    "y": 780,
+    "wires": [
+      [
+        "f_auth_tp"
+      ]
+    ],
+    "z": "tab_p9"
+  },
+  {
+    "id": "f_auth_tp",
+    "type": "function",
+    "name": "Cek X-API-Key",
+    "func": "const key = env.get(\"API_KEY\") || \"secret123\";\nif (msg.req.headers[\"x-api-key\"] === key) return [msg, null];\nmsg.statusCode = 401;\nmsg.payload = { error: \"Unauthorized: header X-API-Key tidak valid\" };\nreturn [null, msg];",
+    "outputs": 2,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 330,
+    "y": 780,
+    "wires": [
+      [
+        "f_thr_put"
+      ],
+      [
+        "h_thr_out"
+      ]
+    ],
+    "z": "tab_p9"
+  },
+  {
+    "id": "f_thr_put",
+    "type": "function",
+    "name": "Validasi + set threshold",
+    "func": "const v = Number(msg.payload && msg.payload.threshold);\nif (!isFinite(v) || v < -50 || v > 150) {\n    msg.statusCode = 400;\n    msg.payload = { error: \"Body harus JSON: {\\\"threshold\\\": <angka -50..150>}\" };\n    return [null, msg, null];\n}\nflow.set(\"threshold\", v);\nconst last = flow.get(\"last\");\nconst wsMsgs = [{ payload: JSON.stringify({ type: \"threshold\", threshold: v }) }];\nif (last && last.temp > v) {\n    const message = `Suhu ${last.temp}\\u00B0C melewati batas ${v}\\u00B0C`;\n    wsMsgs.push({ payload: JSON.stringify({ type: \"alert\", ts: new Date().toISOString(), temp: last.temp, threshold: v, message }) });\n    node.warn(message);\n}\nmsg.statusCode = 200;\nmsg.payload = { threshold: v, message: \"Batas suhu diperbarui\" };\nreturn [msg, null, wsMsgs];",
+    "outputs": 3,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 560,
+    "y": 780,
+    "wires": [
+      [
+        "h_thr_out"
+      ],
+      [
+        "h_thr_out"
+      ],
+      [
+        "ws_o2"
+      ]
+    ],
+    "z": "tab_p9"
+  },
+  {
+    "id": "ws_o2",
+    "type": "websocket out",
+    "name": "Broadcast WS",
+    "server": "ws_srv",
+    "client": "",
+    "x": 800,
+    "y": 820,
+    "wires": [],
+    "z": "tab_p9"
+  },
+  {
+    "id": "h_thr_out",
+    "type": "http response",
+    "name": "",
+    "statusCode": "",
+    "headers": {},
+    "x": 800,
+    "y": 740,
+    "wires": [],
+    "z": "tab_p9"
+  },
+  {
+    "id": "c_dash",
+    "type": "comment",
+    "name": "7) GET /dashboard  (Chart.js real-time via WebSocket /ws/suhu)",
+    "info": "",
+    "x": 260,
+    "y": 900,
+    "wires": [],
+    "z": "tab_p9"
+  },
+  {
+    "id": "h_dash",
+    "type": "http in",
+    "name": "",
+    "url": "/dashboard",
+    "method": "get",
+    "upload": false,
+    "swaggerDoc": "",
+    "x": 130,
+    "y": 940,
+    "wires": [
+      [
+        "t_dash"
+      ]
+    ],
+    "z": "tab_p9"
+  },
+  {
+    "id": "t_dash",
+    "type": "template",
+    "name": "Halaman dashboard",
+    "field": "payload",
+    "fieldType": "msg",
+    "format": "html",
+    "syntax": "plain",
+    "template": "<!DOCTYPE html>\n<html lang=\"id\">\n<head>\n<meta charset=\"utf-8\">\n<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n<title>Dashboard Suhu Real-time</title>\n<script src=\"https://cdn.jsdelivr.net/npm/chart.js@4\"></script>\n<style>\n  body{font-family:system-ui,sans-serif;margin:0;background:#f4f6f8;color:#222}\n  header{background:#1e293b;color:#fff;padding:14px 20px;display:flex;justify-content:space-between;align-items:center}\n  main{max-width:900px;margin:20px auto;padding:0 16px}\n  .card{background:#fff;border-radius:10px;padding:16px;margin-bottom:16px;box-shadow:0 1px 4px rgba(0,0,0,.1)}\n  .row{display:flex;gap:12px;flex-wrap:wrap;align-items:center}\n  .big{font-size:2.4rem;font-weight:700}\n  input{padding:8px;border:1px solid #cbd5e1;border-radius:6px}\n  button{padding:8px 14px;border:0;border-radius:6px;background:#2563eb;color:#fff;cursor:pointer}\n  #alert{display:none;background:#dc2626;color:#fff;padding:12px;border-radius:8px;margin-bottom:16px;font-weight:600}\n  #ws{font-size:.85rem;padding:3px 10px;border-radius:20px;background:#64748b}\n  #ws.on{background:#16a34a}\n</style>\n</head>\n<body>\n<header><strong>Dashboard Suhu</strong><span id=\"ws\">WebSocket: putus</span></header>\n<main>\n  <div id=\"alert\"></div>\n  <div class=\"card row\">\n    <div><div>Suhu sekarang</div><div class=\"big\"><span id=\"temp\">--</span> &deg;C</div></div>\n    <div><div>Kelembapan</div><div class=\"big\"><span id=\"hum\">--</span> %</div></div>\n    <div><div>Batas suhu</div><div class=\"big\"><span id=\"thr\">--</span> &deg;C</div></div>\n  </div>\n  <div class=\"card row\">\n    <label>API Key <input id=\"key\" type=\"password\" placeholder=\"X-API-Key\"></label>\n    <button onclick=\"saveKey()\">Simpan &amp; muat</button>\n    <label>Batas baru <input id=\"newThr\" type=\"number\" step=\"0.5\" style=\"width:90px\"></label>\n    <button onclick=\"setThreshold()\">Set batas (PUT)</button>\n  </div>\n  <div class=\"card\"><canvas id=\"chart\" height=\"110\"></canvas></div>\n</main>\n<script>\nconst MAX_POINTS = 40;\nlet apiKey = localStorage.getItem('apiKey') || '';\ndocument.getElementById('key').value = apiKey;\n\nconst chart = new Chart(document.getElementById('chart'), {\n  type: 'line',\n  data: { labels: [], datasets: [\n    { label: 'Suhu (°C)', data: [], borderColor: '#2563eb', tension: .3, pointRadius: 2 },\n    { label: 'Batas', data: [], borderColor: '#dc2626', borderDash: [6,6], pointRadius: 0 }\n  ]},\n  options: { animation: false, scales: { y: { title: { display: true, text: '°C' } } } }\n});\n\nfunction addPoint(ts, temp, thr) {\n  chart.data.labels.push(new Date(ts).toLocaleTimeString());\n  chart.data.datasets[0].data.push(temp);\n  chart.data.datasets[1].data.push(thr);\n  if (chart.data.labels.length > MAX_POINTS) {\n    chart.data.labels.shift();\n    chart.data.datasets.forEach(d => d.data.shift());\n  }\n  chart.update();\n}\n\nfunction showReading(r) {\n  document.getElementById('temp').textContent = r.temp;\n  document.getElementById('hum').textContent = r.hum;\n  document.getElementById('thr').textContent = r.threshold;\n  addPoint(r.ts, r.temp, r.threshold);\n}\n\nfunction showAlert(a) {\n  const el = document.getElementById('alert');\n  el.textContent = '⚠ ' + a.message;\n  el.style.display = 'block';\n  clearTimeout(showAlert.t);\n  showAlert.t = setTimeout(() => el.style.display = 'none', 5000);\n  if ('Notification' in window && Notification.permission === 'granted') new Notification('Peringatan suhu', { body: a.message });\n}\n\nfunction saveKey() {\n  apiKey = document.getElementById('key').value.trim();\n  localStorage.setItem('apiKey', apiKey);\n  loadHistory();\n}\n\nasync function api(path, opts = {}) {\n  opts.headers = Object.assign({ 'X-API-Key': apiKey, 'Content-Type': 'application/json' }, opts.headers || {});\n  const res = await fetch(path, opts);\n  if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || res.status);\n  return res.json();\n}\n\nasync function loadHistory() {\n  try {\n    const thr = (await api('/api/threshold')).threshold;\n    const rows = await api('/api/history?limit=' + MAX_POINTS);\n    chart.data.labels = []; chart.data.datasets.forEach(d => d.data = []);\n    rows.forEach(r => addPoint(r.ts, r.temp, thr));\n    document.getElementById('thr').textContent = thr;\n  } catch (e) { console.warn('History gagal:', e.message); }\n}\n\nasync function setThreshold() {\n  const v = parseFloat(document.getElementById('newThr').value);\n  try { await api('/api/threshold', { method: 'PUT', body: JSON.stringify({ threshold: v }) }); }\n  catch (e) { alert('Gagal: ' + e.message); }\n}\n\nfunction connectWS() {\n  const ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws/suhu');\n  const badge = document.getElementById('ws');\n  ws.onopen = () => { badge.textContent = 'WebSocket: tersambung'; badge.className = 'on'; };\n  ws.onclose = () => { badge.textContent = 'WebSocket: putus'; badge.className = ''; setTimeout(connectWS, 2000); };\n  ws.onmessage = ev => {\n    const m = JSON.parse(ev.data);\n    if (m.type === 'reading') showReading(m);\n    else if (m.type === 'alert') showAlert(m);\n    else if (m.type === 'threshold') document.getElementById('thr').textContent = m.threshold;\n  };\n}\n\nif ('Notification' in window && Notification.permission === 'default') Notification.requestPermission();\nloadHistory();\nconnectWS();\n</script>\n</body>\n</html>\n",
+    "output": "str",
+    "x": 340,
+    "y": 940,
+    "wires": [
+      [
+        "h_dash_out"
+      ]
+    ],
+    "z": "tab_p9"
+  },
+  {
+    "id": "h_dash_out",
+    "type": "http response",
+    "name": "",
+    "statusCode": "",
+    "headers": {},
+    "x": 560,
+    "y": 940,
+    "wires": [],
+    "z": "tab_p9"
+  }
+]
